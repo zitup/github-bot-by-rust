@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Issue {
     pub title: String,
     pub html_url: String,
@@ -8,7 +8,7 @@ pub struct Issue {
     pub pull_request: Option<PullRequest>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct PullRequest {
-    html_url: String,
+    pub html_url: String,
 }

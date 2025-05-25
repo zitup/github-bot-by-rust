@@ -17,7 +17,7 @@ impl GithubService {
         }
     }
 
-    pub async fn get_new_issues(&self) -> Result<Vec<Issue>, Error> {
+    pub async fn get_new_issues(&mut self) -> Result<Vec<Issue>, Error> {
         let issues = self.client.get_recent_issues(10).await?;
         let index = match &self.last_issue {
             Some(last_issue) => issues
@@ -29,6 +29,7 @@ impl GithubService {
             Some(index) => issues.into_iter().skip(index + 1).collect(),
             None => issues,
         };
+        self.last_issue = Some(new_issues.first().unwrap().clone());
         Ok(new_issues)
     }
 }

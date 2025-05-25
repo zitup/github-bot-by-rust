@@ -17,7 +17,7 @@ impl TelegramClient {
         Self { client, token }
     }
 
-    pub async fn send_message(&self, message: &str, chat_id: &str) -> Result<(), Error> {
+    pub async fn send_message(&self, message: String, chat_id: &str) -> Result<(), Error> {
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.token);
         self.client
             .post(url)
