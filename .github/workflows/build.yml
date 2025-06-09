@@ -1,0 +1,161 @@
+name: Build and Deploy Rust Binary
+
+on:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build for Linux
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-
+
+      # - name: Run tests
+      #   run: cargo test --verbose
+
+      - name: Build binary
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          # 获取项目名称
+          PROJECT_NAME=$(grep '^name' Cargo.toml | head -n1 | cut -d'"' -f2)
+
+          # 创建打包目录
+          mkdir -p dist
+
+          # 复制二进制文件
+          cp target/${{ matrix.target }}/release/$PROJECT_NAME dist/
+
+          # 创建压缩包
+          cd dist
+          tar -czf ${PROJECT_NAME}-${{ matrix.target }}.tar.gz $PROJECT_NAME
+
+          # 计算校验和
+          sha256sum ${PROJECT_NAME}-${{ matrix.target }}.tar.gz > ${PROJECT_NAME}-${{ matrix.target }}.tar.gz.sha256
+
+          echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ matrix.target }}
+          path: |
+            dist/${{ env.PROJECT_NAME }}-${{ matrix.target }}.tar.gz
+            dist/${{ env.PROJECT_NAME }}-${{ matrix.target }}.tar.gz.sha256
+
+  deploy:
+    name: Deploy to Server
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare deployment files
+        run: |
+          mkdir -p deploy
+          find artifacts -name "*.tar.gz" -exec cp {} deploy/ \;
+          find artifacts -name "*.sha256" -exec cp {} deploy/ \;
+          ls -la deploy/
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        run: |
+          # 上传文件到服务器
+          scp -r deploy/* root@${{ secrets.SERVER_HOST }}:${{ secrets.SERVER_PATH }}/
+
+          # 在服务器上执行部署脚本
+          ssh root@${{ secrets.SERVER_HOST }} << "EOF"
+            cd ${{ secrets.SERVER_PATH }}
+            
+            # 获取项目名称
+            PROJECT_NAME=""
+            for file in *.tar.gz; do
+              if [[ "$file" == *"x86_64-unknown-linux-gnu"* ]]; then
+                PROJECT_NAME=$(echo "$file" | sed 's/-x86_64-unknown-linux-gnu.tar.gz//')
+                break
+              fi
+            done
+            
+            if [ -z "$PROJECT_NAME" ]; then
+              echo "❌ Could not determine project name from artifacts"
+              exit 1
+            fi
+            
+            echo "📦 Deploying project: $PROJECT_NAME"
+            
+            # 备份当前版本
+            if [ -f current_binary ]; then
+              cp current_binary backup_binary_$(date +%Y%m%d_%H%M%S)
+            fi
+            
+            # 解压新版本
+            for file in *.tar.gz; do
+              if [ -f "$file" ]; then
+                tar -xzf "$file"
+                if [[ "$file" == *"x86_64-unknown-linux-gnu"* ]]; then
+                  cp "$PROJECT_NAME" current_binary
+                  chmod +x current_binary
+                fi
+              fi
+            done
+            
+            # 验证环境变量文件
+            if [ -f .env ]; then
+              echo "✅ Environment file exists"
+            else
+              echo "TELEGRAM_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" > .env
+              echo "TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}" >> .env
+            fi
+            
+            # 重启服务
+            pm2 delete $PROJECT_NAME 2>/dev/null || true
+            pm2 start ./current_binary --name $PROJECT_NAME
+            pm2 save
+            
+            echo "✅ Deployment completed!"
+            pm2 status
+          EOF
