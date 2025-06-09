@@ -35,7 +35,7 @@ async fn main() -> Result<(), JobSchedulerError> {
     let mut scheduler = JobScheduler::new().await?;
 
     scheduler
-        .add(Job::new_async("0 0/2 * * * *", move |_, _| {
+        .add(Job::new_async("0 0/2 2-14 * * *", move |_, _| {
             let github_service = github_service.clone();
             let telegram_client = telegram_client.clone();
             Box::pin(async move {
