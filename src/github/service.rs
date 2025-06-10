@@ -19,17 +19,15 @@ impl GithubService {
 
     pub async fn get_new_issues(&mut self) -> Result<Vec<Issue>, Error> {
         let issues = self.client.get_recent_issues(10).await?;
-        let index = match &self.last_issue {
+
+        let new_issues = match &self.last_issue {
             Some(last_issue) => issues
-                .iter()
-                .position(|issue| issue.html_url == last_issue.html_url),
-            None => None,
-        };
-        // find the issues before the last issue
-        let new_issues = match index {
-            Some(index) => issues.into_iter().take(index).collect(),
+                .into_iter()
+                .filter(|issue| issue.created_at > last_issue.created_at)
+                .collect(),
             None => issues,
         };
+
         if !new_issues.is_empty() {
             self.last_issue = Some(new_issues.first().unwrap().clone());
         }
